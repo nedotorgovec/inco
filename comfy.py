@@ -6,15 +6,16 @@ from colorama import Fore, Style, init
 init(autoreset=True)
 
 # -------------------- Настройки --------------------
-DELAY_RANGE = (15, 25)  # диапазон секунд между всеми функциями
+DELAY_RANGE = (15, 25)
 WRAP_CONTRACT = '0xA449bc031fA0b815cA14fAFD0c5EdB75ccD9c80f'
 USDC_CONTRACT = '0xAF33ADd7918F685B2A82C1077bd8c07d220FFA04'
 CHAIN_ID = 84532
 RPC_URL = "https://sepolia.base.org"
+ROUNDS_PER_WALLET = 2  # количество функций за один "раунд" кошелька
 
 COLOR_LIST = [Fore.RED, Fore.GREEN, Fore.YELLOW, Fore.CYAN, Fore.MAGENTA]
 wallet_colors = {}
-wallet_delays = {}  # индивидуальные задержки для кошельков
+wallet_delays = {}
 wallet_nonces = {}
 
 # -------------------- Цвета --------------------
@@ -34,7 +35,6 @@ def connect_to_rpc_with_proxy(proxy=None):
         import os
         os.environ["HTTP_PROXY"] = proxy
         os.environ["HTTPS_PROXY"] = proxy
-
     w3 = Web3(Web3.HTTPProvider(RPC_URL))
     if not w3.is_connected():
         raise Exception(f"❌ Could not connect to RPC: {RPC_URL}")
@@ -50,7 +50,7 @@ def get_nonce(w3, wallet):
     wallet_nonces[wallet] += 1
     return nonce
 
-# -------------------- Рандомная задержка для каждого кошелька --------------------
+# -------------------- Рандомная задержка --------------------
 async def delay(wallet=None):
     if wallet:
         public = Web3.to_checksum_address(Web3().eth.account.from_key(wallet).address)
@@ -63,7 +63,6 @@ async def delay(wallet=None):
 # -------------------- Отправка транзакции --------------------
 async def send_transaction(w3, wallet, tx, description="tx"):
     public = Web3.to_checksum_address(Web3().eth.account.from_key(wallet).address)
-
     for attempt in range(3):
         try:
             gas_estimate = w3.eth.estimate_gas(tx)
@@ -79,18 +78,24 @@ async def send_transaction(w3, wallet, tx, description="tx"):
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
     if receipt["status"] != 1:
         raise Exception(f"[{tx['from']}] {description} transaction failed")
-
     print(colorize_for_wallet(f"[{tx['from']}] {description} DONE | {tx_hash.hex()}", public))
     return tx_hash.hex()
 
-# -------------------- Генерация случайного amount --------------------
-def random_amount(min_val=1, max_val=100000):
-    return random.randint(min_val, max_val)
+# -------------------- Случайные суммы для каждой функции --------------------
+def random_amount_for_function(func_type):
+    if func_type in ["mint_usdc", "mint_cusdc"]:
+        return random.randint(2000, 5000)  # больше токенов
+    elif func_type == "unshield_cusdc":
+        return random.randint(100, 2500)   # меньше токенов
+    elif func_type == "shield_usdc":
+        return random.randint(500, 3000)   # среднее количество
+    else:
+        return random.randint(1000, 3000)
 
 # -------------------- Основные операции --------------------
 async def mint_usdc(w3, wallet):
     public = Web3.to_checksum_address(Web3().eth.account.from_key(wallet).address)
-    amount = int(w3.to_wei(random_amount(1000, 10000), "ether"))
+    amount = int(w3.to_wei(random_amount_for_function("mint_usdc"), "ether"))
     tx = {
         "chainId": CHAIN_ID,
         "data": f"0x40c10f19"
@@ -106,7 +111,7 @@ async def mint_usdc(w3, wallet):
 
 async def mint_cusdc(w3, wallet):
     public = Web3.to_checksum_address(Web3().eth.account.from_key(wallet).address)
-    amount = int(w3.to_wei(random_amount(1000, 10000), "ether"))
+    amount = int(w3.to_wei(random_amount_for_function("mint_cusdc"), "ether"))
     tx = {
         "chainId": CHAIN_ID,
         "data": f"0x40c10f19"
@@ -122,7 +127,7 @@ async def mint_cusdc(w3, wallet):
 
 async def shield_usdc(w3, wallet):
     public = Web3.to_checksum_address(Web3().eth.account.from_key(wallet).address)
-    amount = int(w3.to_wei(random_amount(100, 3000), "ether"))
+    amount = int(w3.to_wei(random_amount_for_function("shield_usdc"), "ether"))
     tx_approve = {
         "chainId": CHAIN_ID,
         "data": f"0x095ea7b3"
@@ -150,7 +155,7 @@ async def shield_usdc(w3, wallet):
 
 async def unshield_cusdc(w3, wallet):
     public = Web3.to_checksum_address(Web3().eth.account.from_key(wallet).address)
-    amount = int(w3.to_wei(random_amount(100, 2999), "ether"))
+    amount = int(w3.to_wei(random_amount_for_function("unshield_cusdc"), "ether"))
     tx = {
         "chainId": CHAIN_ID,
         "data": f"0xde0e9a3e{amount:064x}",
@@ -164,17 +169,22 @@ async def unshield_cusdc(w3, wallet):
 
 # -------------------- Обработка одного кошелька --------------------
 async def process_wallet(w3, wallet):
+    public = Web3.to_checksum_address(Web3().eth.account.from_key(wallet).address)
+    functions = [mint_usdc, mint_cusdc, shield_usdc, unshield_cusdc]
+
     try:
-        await mint_usdc(w3, wallet)
-        await delay(wallet)
-        await mint_cusdc(w3, wallet)
-        await delay(wallet)
-        await shield_usdc(w3, wallet)
-        await delay(wallet)
-        await unshield_cusdc(w3, wallet)
+        for round_num in range(1, ROUNDS_PER_WALLET + 1):
+            func = random.choice(functions)  # рандомный выбор функции
+            print(colorize_for_wallet(f"⏳ [{public}] Round {round_num}: starting {func.__name__}", public))
+            try:
+                await func(w3, wallet)
+            except Exception as e:
+                print(colorize_for_wallet(f"❌ [{public}] Round {round_num}: {func.__name__} failed | {e}", public))
+            
+            await delay(wallet)
+
     except Exception as e:
-        public = Web3.to_checksum_address(Web3().eth.account.from_key(wallet).address)
-        print(colorize_for_wallet(f"[{public}] Error: {e}", public))
+        print(colorize_for_wallet(f"[{public}] Wallet processing failed: {e}", public))
 
 # -------------------- Обработка всех кошельков --------------------
 async def process_all_wallets(w3, wallets):

@@ -1,2 +1,5 @@
-
+asyncio
+colorama
+logging
+requests
 web3==7.11.0
